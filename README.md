@@ -10,3 +10,4 @@ See: https://github.com/psf/requests/pull/5875#issuecomment-1123348168
 * Install requirements
 * Run `python download_data.py` (feel free to interrupt it if you want)
 * Run `python analyze_data.py`
+* Run `python format_results.py`

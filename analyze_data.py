@@ -1,5 +1,7 @@
+import multiprocessing
+import pickle
 from collections import defaultdict, Counter
-from typing import Optional
+from typing import Optional, Tuple, Any
 
 import requests
 import tqdm
@@ -21,29 +23,50 @@ def get_encoding_from_headers_without_fallback(headers) -> Optional[str]:
     return None
 
 
+def normalize_encoding_name(encoding_name: str) -> str:
+    encoding_name = encoding_name.lower()
+    if encoding_name == "utf8":
+        return "utf-8"
+    return encoding_name
+
+
+def read_encoding(key: str) -> Optional[Tuple[bool, str, Any]]:
+    response: requests.Response = storage[key]
+    if response.status_code >= 400:
+        return None
+    if not response.content:
+        return None
+    url = response.url
+    enc = get_encoding_from_headers_without_fallback(response.headers)
+    if not enc:
+        fallback_enc = get_encoding_from_headers(response.headers)
+        if fallback_enc:
+            enc = f"{normalize_encoding_name(fallback_enc)} (via fallback)"
+    else:
+        enc = normalize_encoding_name(enc)
+    if not enc or ", " in enc:
+        return (False, url, response.headers)
+    return (True, url, enc)
+
+
 def main():
     sites_by_encoding = defaultdict(list)
-    encoding_counts = Counter()
+    anomalies = []
 
-    for key in tqdm.tqdm(list(storage)):
-        response: requests.Response = storage[key]
-        if response.status_code >= 400:
-            continue
-        if not response.content:
-            continue
-        url = response.url
-        enc = get_encoding_from_headers_without_fallback(response.headers)
-        if not enc:
-            fallback_enc = get_encoding_from_headers(response.headers)
-            if fallback_enc:
-                enc = f"{fallback_enc} (via fallback)"
-        if not enc or ", " in enc:
-            print("???", url, response.headers)
-        sites_by_encoding[enc].append(url)
-        encoding_counts[enc] += 1
+    with multiprocessing.Pool() as pool:
+        keys = [k for k in storage if not k.startswith("error")]
+        res_iter = pool.imap_unordered(read_encoding, keys, chunksize=8)
+        for res in tqdm.tqdm(res_iter, total=len(storage)):
+            if res is None:
+                continue
+            ok, url, encoding = res
+            if ok:
+                sites_by_encoding[encoding].append(url)
+            else:
+                anomalies.append(res[1:])
 
-    print(encoding_counts)
-    print(sum(encoding_counts.values()))
+    with open("analyzed.pickle", "wb") as f:
+        pickle.dump((sites_by_encoding, anomalies), f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 if __name__ == "__main__":
